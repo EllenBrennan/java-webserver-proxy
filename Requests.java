@@ -1,5 +1,6 @@
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
@@ -12,7 +13,7 @@ import java.util.ArrayList;
 
 public class Requests implements  Runnable{
 
-    Socket client;
+    Socket client;    
     InputStreamReader cIn;
     BufferedReader cInReader;
     OutputStreamWriter      cOut;
@@ -34,6 +35,7 @@ public class Requests implements  Runnable{
 
         //processing request by first extracing url then obtaining request as string
         String line = cInReader.readLine(); //retrieve the request line
+        String method = line.split(" ")[0];  //Http method ie get or connect
         ArrayList <String> req = new ArrayList<>();
         String current = line;
 
@@ -46,33 +48,21 @@ public class Requests implements  Runnable{
 
         String url = getUrl(line);
         System.out.println("current host is " + url);
-        System.out.println(req);
+        //System.out.println(req);
         if(!bannedSites.contains(url)){ 
           //if site from request not banned, make socket  to connect to webserver
           Socket server = new Socket(url, 80);
+          if(method.equals("CONNECT")){
+            httpSreq(server, req);
 
-          //write request to server
-          BufferedWriter writeToServer = new BufferedWriter(
-            new OutputStreamWriter(server.getOutputStream()));
-            
-
-            //for each line of the request, write 
-            System.out.println("writing request out: ");
-            for(String x : req){
-              writeToServer.write(x);
-              System.out.println(x);
-            }
-            writeToServer.flush();
-
-          //read server's response
-          BufferedReader readFromServer = new BufferedReader(new InputStreamReader(server.getInputStream()));
-          String reply;
-          while ((reply = readFromServer.readLine())!= null){
-            cOut.write(reply + "\r\n");
-            cOut.flush();
           }
+          else{
+            httpReq(server, req);
+          }
+          
 
 
+          
 
           server.close();
           client.close();
@@ -109,6 +99,38 @@ public class Requests implements  Runnable{
         String url = url_and_port.substring(0, portStartIndex);
         return url;
         
+    }
+
+
+
+    //handling http requests
+    private void httpReq(Socket server, ArrayList<String> req) throws IOException{
+      //write request to server
+      BufferedWriter writeToServer = new BufferedWriter(
+        new OutputStreamWriter(server.getOutputStream()));
+        
+
+        //for each line of the request, write 
+        System.out.println("writing request out: ");
+        for(String x : req){
+          writeToServer.write(x);
+          System.out.println(x);
+        }
+        writeToServer.flush();
+
+      //read server's response
+      BufferedReader readFromServer = new BufferedReader(new InputStreamReader(server.getInputStream()));
+      String reply;
+      while ((reply = readFromServer.readLine())!= null){
+        cOut.write(reply + "\r\n");
+        cOut.flush();
+      }
+
+    }
+
+    private void httpSreq (Socket server, ArrayList<String> req) throws IOException{
+      System.out.println("this is a https request woops");
+
     }
 
 
