@@ -13,36 +13,27 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
 
-/**
- * Handles individual client requests in its own thread
- */
+    /** Requests class handles individual client requests on their own thead
+      @param  client: the socket connecting the proxy server port and the client ie browser request
+      @param bannedSites: a pointer to the banned sites list
+      @param cachedSiteS: a pointer to the cache hashmap
+      @param times:  a pointer to the time data hashmap for 
+     **/
+
 public class Requests implements Runnable {
 
-    // The client socket that connected to our proxy
     private Socket client;
 
-    // Streams for reading/writing data to/from client
     private InputStream fromClient;
     private OutputStream toClient;
     private BufferedReader fromClientR;
     private BufferedWriter toClientW;
-
-    // pointer to blocked sites list
     private ArrayList<String> bannedSites;
-    // pointer to cached sites list
     private HashMap<String, byte[]> cachedSites;
-
     private HashMap<String, long[]> times;
 
 
 
-    /**
-     * Constructor
-     * 
-     * @param client the socket connected to the client (browser)
-     * @param bannedSites the shared list of blocked domains
-     * @param cachedSites the shared map for caching HTTP GET responses
-     */
     public Requests(Socket client, ArrayList<String> bannedSites, HashMap<String, byte[]> cachedSites, HashMap<String, long[]> times) {
         //initialising pointers to my client, sites list, cache list and timing hashmap
         this.client = client;
@@ -52,68 +43,58 @@ public class Requests implements Runnable {
     }
 
     /**
-     * Main entry point for this request-handling thread.
+     *  RUN
+     *  client request handled on each thread
      */
     @Override
     public void run() {
         try {
-            // Set up streams to read the client's request and send back a response
+            // Setting up streams for writing to/reading from client
             fromClient = client.getInputStream();
             toClient   = client.getOutputStream();
             fromClientR = new BufferedReader(new InputStreamReader(fromClient));
             toClientW   = new BufferedWriter(new OutputStreamWriter(toClient));
 
-            // Get the request line, e.g. "GET http://www.example.com/ HTTP/1.1"
+            //Getting the first line of tjhe request
             String line = fromClientR.readLine();
-            if (line == null || line.isEmpty()) {
-                // If invalid or empty, just return
+            if (line == null || line.isEmpty()) {   // If invalid or empty, just return, closing client socket happens at the end anyways.
                 return;
             }
-
-            // HTTP or HTTPS method (CONNECT, GET, POST, etc.)
+            // the first thing in the request line should be the method ie GET or CONNECT  
             String method = line.split(" ")[0];
 
-            // Collect the entire HTTP request into a list
+            //Collecting each line of the request into an arraylist 
             ArrayList<String> requestLines = new ArrayList<>();
             requestLines.add(line);
-
-            // Read subsequent lines (headers) until an empty line
             String current;
             while ((current = fromClientR.readLine()) != null && !current.isEmpty()) {
                 requestLines.add(current);
             }
 
-            // Identify the host from the request line
+            // Identify the host from the request line(host includes the port), we also get the domain(host w/o the port)
             String host = getHost(line);
-            // We'll also parse out just the domain to match our block list
             String domain = getDomain(line);
 
-            // System.out.println("\nRequest line is: " + line);
-            // System.out.println("Host is : " + host);
-            // System.out.println("Domain is: " + domain);  
-
             if (host == null) {
-                // If we couldn't parse a valid host, we can't proceed
+                // If we couldn't parse a valid host, we can't proceed so we leave and close the client socket at finally
                 return;
             }
 
             // SITE BLOCKING:
-            // If this domain is in bannedSites, respond with a simple "403 Forbidden"
+            // if the websites domain is present in our ban list we can't proceed so we don't send the request on to the server
             if (bannedSites.contains(domain)) {
                 toClientW.write("HTTP/1.1 403 Forbidden\r\n");
                 toClientW.write("Content-Type: text/plain\r\n");
                 toClientW.write("\r\n");
-                toClientW.write("This site is banned.\r\n");
                 toClientW.flush();
                 return; // no further forwarding to real server
             }
             else {
                 // If not on block list, check if HTTPS or HTTP
-                if ("CONNECT".equalsIgnoreCase(method)) {
-                    // For HTTPS, pass to handleHTTPSRequest
+                if ("CONNECT".equalsIgnoreCase(method)) {//HTTPS so pass host to https handler function
                     handleHTTPSRequest(host);
                 } else {
-                    // For normal HTTP, handle request (with potential caching)
+                    //otherwise http handle with http handler method
                     handleHTTPRequest(host, requestLines);
                 }
             }
@@ -131,34 +112,25 @@ public class Requests implements Runnable {
     }
 
     /**
-     * Helper method to extract the "host:port" portion from the request line.
-     * 
-     * If it's CONNECT, typically looks like: "CONNECT www.example.com:443 HTTP/1.1"
-     * Otherwise might look like: "GET http://www.example.com/page HTTP/1.1"
-     * 
-     * @param reqLine The first line of the HTTP request
-     * @return e.g. "www.example.com" or "www.example.com:443"
-     */
+     * Helper method to take the "host:port" part of the request line out
+     * @param reqLine: the first line of the http/https request */
     private String getHost(String reqLine){
-        if (reqLine == null) return null;
+        if (reqLine == null) return null; //if empty request line return
 
-        String[] parts = reqLine.split(" ");
-        if (parts.length < 2) return null;
-        String fullUrl = parts[1];  // e.g. "http://www.example.com/"
+        String[] parts = reqLine.split(" "); //split request line by spaces
+        if (parts.length < 2) return null;      // if there are less then two sections two this line ie just CONNECT instead of CONNECT www.website.com, return
+        String fullUrl = parts[1];
 
-        // If method is CONNECT, the URL is typically just "www.example.com:443"
+        // If method is CONNECT we just return the whole url for https
         if (reqLine.startsWith("CONNECT ")) {
             return fullUrl; 
         }
         else {
-            // HTTP request lines often have "http://www.example.com/"
+            // HTTP request lines often have "http://" in the front so we're gonna remove that here
             if (fullUrl.startsWith("http://")) {
                 fullUrl = fullUrl.substring(7); // remove "http://"
             }
-            else if (fullUrl.startsWith("https://")) {
-                fullUrl = fullUrl.substring(8); // remove "https://"
-            }
-            // Remove any path portion
+            // Remove additional paths added onto the end of the url, we just want the domain and port(if its included)
             int slashIndex = fullUrl.indexOf('/');
             if (slashIndex >= 0) {
                 fullUrl = fullUrl.substring(0, slashIndex);
@@ -167,9 +139,12 @@ public class Requests implements Runnable {
         }
     }
 
+
+
+
     /**
-     * Extracts just the domain (e.g. "www.example.com") from a "host:port" string (e.g. "www.example.com:443")
-     * This is used to check if it's in the bannedSites list.
+     * Extracts just the domain (e.g. "www.example.com") from a host thats formatted like host:port
+     * if it doesnt have port stuff on it then it just returns the host
      */
     private String getDomain(String reqLine){
         String host = getHost(reqLine);
@@ -183,35 +158,34 @@ public class Requests implements Runnable {
     }
 
     /**
-     * Handle a standard HTTP request (non-CONNECT).
-     * This includes a basic caching mechanism for GET requests.
-     */
+     * Handle Http request
+    */
     private void handleHTTPRequest(String host, ArrayList<String> requestLines) throws IOException {
-
-
-        //http request start time for timing data
+        //tracking start time to see how long it takes to fufill the http request
         long startTime = System.nanoTime();
-        // From the first request line, parse method & raw URL
+
+        // From the first request line get method and url
         String firstLine = requestLines.get(0); 
         String domain = getHost(firstLine);
-        String[] tokens  = firstLine.split(" ");
-        String method    = tokens[0];   // e.g. "GET"
-        String rawUrl    = tokens[1];   // e.g. "http://www.example.com/page"
+        String[] sections  = firstLine.split(" ");
+        String method    = sections[0];   
+        String url    = sections[1];   
 
-        // Build a cache key, e.g. "GET|http://www.example.com/page"
-        String cacheKey = method.toUpperCase() + "|" + rawUrl;
+        // our key is just the request type and the specific url
+        String key = method.toUpperCase() + " " + url;
 
-        // Check if it's a GET request and if the response is already cached
-        if ("GET".equalsIgnoreCase(method) && cachedSites.containsKey(cacheKey)) {
+        // if we have a GET http request check if page is stored within our cache
+        if ("GET".equals(method) && cachedSites.containsKey(key)) {
            
-            // Retrieve cached data (the entire HTTP response as a byte[])
-            byte[] cachedResponse = cachedSites.get(cacheKey);
+            //retrieve stored byte array of from cache
+            byte[] cachedResponse = cachedSites.get(key);
 
-            // Send that data back to the client
+            //Send that data to client
             toClient.write(cachedResponse);
 
-            //get endtime
+            
             //if page has been cached, then its been accessed before, therefore a time data entry exists for the non cached request
+            //we plug the time elapsed since this method was called into the timedata hashmap
             long endTime = System.nanoTime();
             System.out.println("stary time is " + startTime);
             System.out.println("END TIME IS " + endTime);
@@ -223,7 +197,8 @@ public class Requests implements Runnable {
 
         // If not cached (or method is not GET), we must forward request to the real server:
 
-        // If host includes a port, parse it out; otherwise default to 80 for HTTP
+        // If host includes a port we take it out and we make the socket connect to that port on the webserver
+        //otherwise we default to port 80 for HTTP
         String hostname = host;
         int port = 80;
         int colonIndex = host.indexOf(':');
@@ -240,37 +215,42 @@ public class Requests implements Runnable {
         for (String line : requestLines) {
             toServerB.write(line + "\r\n");
         }
-        // End of headers
         toServerB.write("\r\n");
         toServerB.flush();
 
-        // Read the server's response fully
+        // reading in server response
+        //we get byte inputstream from the server and read the contents of this stream in roughly 8kb chunks 
         InputStream fromServer = server.getInputStream();
-        ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
+        ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream(); //used as a 
+        //resizable byte array where I add each 8kb chunk of the response to
+        byte[] buffer = new byte[8192]; 
         int bytesRead;
-        while ((bytesRead = fromServer.read(buffer)) != -1) {
+        while ((bytesRead = fromServer.read(buffer)) != -1) {//while theres still more data to read in, add to responseBufer
             responseBuffer.write(buffer, 0, bytesRead);
         }
-        // Entire response is now in responseBuffer
+        // once im finished writing to response buffer, plug into byte array
         byte[] serverResponse = responseBuffer.toByteArray();
 
-        // Send the server's response to the client
+        // Send response to client 
         BufferedOutputStream toClientB = new BufferedOutputStream(client.getOutputStream());
-        long endTime = System.nanoTime();
-        long[] timesArray = new long[2];
-        timesArray[0] = endTime - startTime;
-        times.put(domain, timesArray);
         toClientB.write(serverResponse);
         toClientB.flush();
 
-        // If this was a GET request, store the response in the cache
+        //get end time of uncached http request, use to calculate the total time elapsed
+        
+        long endTime = System.nanoTime();
+        
+        // If it was a GET request, store the page in cached pages
+        //generate an entry in the timesdata hashmap for the current page
         if ("GET".equalsIgnoreCase(method)) {
-            cachedSites.put(cacheKey, serverResponse);
-            //System.out.println("CACHE STORE for: " + cacheKey);
+
+            long[] timesArray = new long[2];
+            timesArray[0] = endTime - startTime;
+            times.put(domain, timesArray);
+            cachedSites.put(key, serverResponse);
         }
 
-        // Close resources
+        // closing streams and socket connection with webserver
         toServerB.close();
         fromServer.close();
         toClientB.close();
@@ -278,7 +258,7 @@ public class Requests implements Runnable {
     }
 
     /**
-     * Handle an HTTPS (CONNECT) request by tunneling data directly (no caching).
+     * handle https request
      */
     private void handleHTTPSRequest(String hostAndPort) {
         try {
@@ -295,18 +275,19 @@ public class Requests implements Runnable {
             Socket server = new Socket(hostname, port);
             //System.out.println("Connected to " + hostname + ":" + port + " for HTTPS");
 
-            // Notify client that the connection is established
+            // connection established message
+            //lets client know connection was a success
             BufferedWriter proxyToClientWriter = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
             proxyToClientWriter.write("HTTP/1.1 200 Connection Established\r\n");
             proxyToClientWriter.write("Proxy-Agent: MyProxy\r\n");
             proxyToClientWriter.write("\r\n");
             proxyToClientWriter.flush();
 
-            // Set up bidirectional forwarding: client <--> proxy <--> server
+            //streams from/to remote server
             InputStream fromServer = server.getInputStream();
             OutputStream toServer  = server.getOutputStream();
 
-            // Threads to forward data
+            // Threads to forward data from the client to the server and vice versa
             Thread clientToServer = new Thread(new DataForwarder(fromClient, toServer));
             Thread serverToClient = new Thread(new DataForwarder(fromServer, toClient));
 

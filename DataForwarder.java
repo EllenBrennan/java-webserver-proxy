@@ -4,6 +4,7 @@ import java.io.OutputStream;
 
 
 // Helper class for forwarding data in a separate thread
+// takes an input stream from the socket sending on data and an output stream from the socker receiving the data
 class DataForwarder implements Runnable {
     private InputStream from;
     private OutputStream to;
@@ -16,17 +17,20 @@ class DataForwarder implements Runnable {
     @Override
     public void run() {
         try {
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[8192]; // write data to receiver in 8kb ish chunks 
             int bytesRead;
-            while ((bytesRead = from.read(buffer)) != -1) {
+            while ((bytesRead = from.read(buffer)) != -1) { //while there's still data to be read from the input stream, we write
+                                                            //an 8kb chunk of data to the receiver via buffer
                 to.write(buffer, 0, bytesRead);
                 to.flush();
             }
         } catch (IOException e) {
             // Often thrown when the client or server closes the connection
-        } finally {
-            try { from.close(); } catch (IOException e) { /* ignore */ }
-            try { from.close(); } catch (IOException e) { /* ignore */ }
+        } finally { //once the data is finished being transmitted, finally ensures that we close the input and output streams
+            try { from.close(); 
+                  to.close();
+            } catch (IOException e) { /* ignore */ }
+        
         }
     }
 }

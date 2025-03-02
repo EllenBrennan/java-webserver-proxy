@@ -108,12 +108,7 @@ public class Proxy implements Runnable {
             }
         } catch (IOException ex) {
         }
-           
-
-
-
-
-        
+             
     }
     
 
